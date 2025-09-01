@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+    <style>
+        body {
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            font-family: sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+            text-align: center;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            max-height: 250px;
+            display: block;
+            margin: 0 auto;
+        }
+        .blog-body p {
+            text-align: left;
+        }
+        .back-link {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="blog-post-container">
+        <p class="back-link"><a href="index.html">&lt;&lt; Back to Blog</a></p>
+        <h1>{{title}}</h1>
+        <img src="{{image_url}}" alt="Blog post image">
+        <div class="blog-body">
+            {{body}}
+        </div>
+        <div>
+            Published on: {{publish_date}}
+        </div>
+    </div>
+</body>
+</html>

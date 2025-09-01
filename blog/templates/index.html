@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sharing my thoughts</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+            text-align: center;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        a {
+            text-decoration: none;
+            color: blue;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <img src="https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY2RsOTdmenI3Ymt0amQ1dnQzeTg1djJhc3NkbG04b2Y5eWpycXc1cCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7ZeRRuLkFFDbVn7G/giphy.gif" height="100">
+    <h1>read now:</h1>
+    <ul>
+        {{posts_list}}
+    </ul>
+</body>
+</html>
