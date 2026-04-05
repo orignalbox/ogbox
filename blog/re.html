@@ -196,14 +196,6 @@ p1[260 + led_index] = red_value    (0-255)</code></pre>
 
             <p>one interesting direction would be writing completely custom firmware for this keyboard. the SH68F83 is an 8051-based microcontroller, and if you can figure out how the LED matrix is wired to the board — which rows and columns connect to which GPIO pins — you could flash your own firmware and have full control over everything. that's a much bigger project though.</p>
 
-            <table>
-                <tr><th>item</th><th>status</th></tr>
-                <tr><td>per-key RGB control</td><td>✓ working</td></tr>
-                <tr><td>screen color sync</td><td>✓ working (one-shot)</td></tr>
-                <tr><td>full protocol documentation</td><td>✓ done</td></tr>
-                <tr><td>real-time sync</td><td>✗ not possible (flash writes)</td></tr>
-                <tr><td>custom firmware</td><td>✗ future project</td></tr>
-            </table>
 
             <h2>what i learned</h2>
 
