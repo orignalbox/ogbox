@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>reverse engineering my keyboard</title>
+    <meta name="description" content="reverse engineering the redragon k617 fizz keyboard rgb protocol over a weekend">
+    <style>
+        body {
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            font-family: sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+            text-align: center;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            max-height: 250px;
+            display: block;
+            margin: 20px auto;
+        }
+        img.hero {
+            max-height: 300px;
+        }
+        .blog-body p {
+            text-align: left;
+        }
+        .blog-body code {
+            background: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .blog-body pre {
+            background: #f4f4f4;
+            padding: 12px 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+            text-align: left;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+        .blog-body pre code {
+            background: none;
+            padding: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.9em;
+            text-align: left;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+        }
+        th {
+            background: #f4f4f4;
+            font-weight: 600;
+        }
+        .back-link {
+            text-align: center;
+        }
+        a {
+            color: #333;
+        }
+        .caption {
+            text-align: center;
+            font-size: 0.8em;
+            color: #888;
+            margin-top: -12px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="blog-post-container">
+        <p class="back-link"><a href="https://ogbox.me/blog/index.html">&lt;&lt; Back to Blog</a></p>
+        <h1>reverse engineering my keyboard</h1>
+
+        <img class="hero" src="img/121.jpeg" alt="screen sync working — keyboard matching screen colors">
+        <p class="caption">the final result — keyboard colors matching the screen</p>
+
+        <div class="blog-body">
+
+            <p>so i bought this Redragon K617 Fizz in my first year. a nice little 60% keyboard, nothing too fancy. but the one thing i always wanted was screen sync — like what Razer keyboards have, where the keyboard colors match whatever is on the screen. or even a volume visualizer kind of thing. that was always in the back of my head.</p>
+
+            <p>i was dual booting Arch and Windows back then. mainly used Arch for everything but some software only worked on Windows and running a VM consumed too many resources, so i just kept a dual boot. the Redragon RGB software was Windows-only though, and even on Windows it was pretty basic. no screen sync, no API, no way to control it programmatically.</p>
+
+            <img src="img/unname1d.png" alt="redragon oem software">
+            <p class="caption">the Redragon OEM software — Windows only, no API</p>
+
+            <p>fast forward about a year and three months. i was studying the AArch64 architecture (ARMv8) and for some reason i randomly got the idea that maybe i could reverse engineer this keyboard's protocol myself. no idea why that thought came up while reading about ARM, but it did. so that saturday morning i just went for it.</p>
+
+            <h2>finding the device</h2>
+
+            <p>first step was figuring out what this keyboard actually is on USB. opened Device Manager on Windows, found the HID device, and grabbed the vendor and product IDs.</p>
+
+            <img src="img/unnamed.png" alt="hid device properties showing vid and pid">
+            <p class="caption">HID device properties — VID/PID identification</p>
+
+            <table>
+                <tr><th>field</th><th>value</th></tr>
+                <tr><td>keyboard</td><td>Redragon K617 Fizz (60%, wired)</td></tr>
+                <tr><td>controller</td><td>Sinowealth SH68F83</td></tr>
+                <tr><td>USB VID</td><td><code>0x258A</code></td></tr>
+                <tr><td>USB PID</td><td><code>0x0049</code></td></tr>
+                <tr><td>HID interface</td><td>Interface 1, usage page <code>0xFF00</code> (vendor-defined)</td></tr>
+                <tr><td>report size</td><td>1032 bytes per packet</td></tr>
+            </table>
+
+            <p>the Sinowealth SH68F83 is a pretty common chip in budget keyboards. no public documentation, no SDK. everything about how it handles RGB is proprietary.</p>
+
+            <h2>capturing USB traffic</h2>
+
+            <p>the plan was simple — set a color in the OEM software, capture whatever it sends over USB, and replay it from Linux. installed USBPcap on Windows, opened Wireshark, and started recording.</p>
+
+            <img src="img/unna1med.png" alt="wireshark usb capture">
+            <p class="caption">Wireshark capture of the RGB protocol</p>
+
+            <p>this is where i got stuck for a while. i was using a host-only filter on Wireshark, which meant i was filtering out device-to-host traffic. turns out there is one critical packet in that direction — a <code>GET_REPORT</code> handshake — and without it, every single write to the keyboard gets silently ignored. no error, no feedback, just nothing happens. it took me hours to figure out that my filter was hiding the one packet that makes the whole thing work.</p>
+
+            <p>once i removed that filter, i could see the full sequence. the protocol turned out to be exactly 5 packets, always in this order:</p>
+
+            <table>
+                <tr><th>step</th><th>type</th><th>size</th><th>purpose</th></tr>
+                <tr><td>1</td><td>SET_REPORT (id=0x05)</td><td>6 bytes</td><td>INIT — tells firmware "i want to write colors"</td></tr>
+                <tr><td>2</td><td>GET_REPORT (id=0x06)</td><td>1032 bytes</td><td>mandatory handshake — read and discard</td></tr>
+                <tr><td>3</td><td>SET_REPORT (id=0x06)</td><td>1032 bytes</td><td>P1 — the RGB color canvas</td></tr>
+                <tr><td>4</td><td>SET_REPORT (id=0x06)</td><td>1032 bytes</td><td>P2 — key routing (never modify)</td></tr>
+                <tr><td>5</td><td>SET_REPORT (id=0x06)</td><td>1032 bytes</td><td>EXEC — flash commit with <code>5AA5</code> marker</td></tr>
+            </table>
+
+            <h2>cracking the P1 canvas</h2>
+
+            <p>the P1 packet is where all the actual color data lives. it's a 1032-byte blob, but the interesting part is how colors are encoded. it's not RGB triplets per key like you would expect. instead it uses a split-plane architecture — one region for all blue values, one for all green values, one for all red values.</p>
+
+            <table>
+                <tr><th>channel</th><th>base offset</th><th>byte range</th></tr>
+                <tr><td>blue</td><td>8</td><td>bytes 5–126</td></tr>
+                <tr><td>green</td><td>134</td><td>bytes 127–252</td></tr>
+                <tr><td>red</td><td>260</td><td>bytes 281–378</td></tr>
+            </table>
+
+            <p>the formula to set any key to any color:</p>
+            <pre><code>p1[8   + led_index] = blue_value   (0-255)
+p1[134 + led_index] = green_value  (0-255)
+p1[260 + led_index] = red_value    (0-255)</code></pre>
+
+            <p>i figured this out by flooding regions with <code>0xFF</code> and watching which keys lit up and what color. start with a range, see what happens, narrow it down. the data follows a stride-21 layout — each keyboard row takes 14 bytes of actual data followed by a 7-byte gap. once i saw that pattern, mapping individual keys became straightforward.</p>
+
+            <table>
+                <tr><th>probe</th><th>bytes written</th><th>result</th><th>conclusion</th></tr>
+                <tr><td>probe4 test0</td><td>281–378 = 0xFF</td><td>all keys red</td><td>red plane confirmed</td></tr>
+                <tr><td>probe5 test1</td><td>5–65 = 0xFF</td><td>rows 1–2 blue</td><td>blue rows 1–2 at bytes 5–65</td></tr>
+                <tr><td>probe5 test2</td><td>127–187 = 0xFF</td><td>rows 1–2 green</td><td>green channel starts at 127</td></tr>
+                <tr><td>probe5 test5</td><td>127–280 = 0xFF</td><td>all keys green</td><td>full green range confirmed</td></tr>
+                <tr><td>probe5 test16</td><td>281–287 = 0xFF</td><td>esc, 1, 2, 3, 4, 5, 6 red</td><td>red row 0 map + stride-21 confirmed</td></tr>
+            </table>
+
+            <p>i also tried opening the Redragon application in Ghidra to understand the protocol better. i could open the binary but couldn't really find references to the byte values i was looking for — couldn't trace where the app constructs those USB packets. but while digging through the software's directory, i found a file called <code>Cfg.ini</code> that had the complete LED index mapping for all 61 keys. that saved a lot of time, although by that point i had already figured out most of it manually through probing.</p>
+
+            <h2>things that didn't work</h2>
+
+            <p>not everything went smoothly.</p>
+
+            <p><strong>P2 corruption.</strong> any modification to the P2 (routing) packet caused the firmware to crash. the keyboard would just restart. i learned pretty quickly to treat P2 as read-only — copy it exactly from a known-good capture and never touch it.</p>
+
+            <p><strong>flash writes every time.</strong> every EXEC packet contains a <code>5AA5</code> magic marker that triggers a flash write. there is no RAM-only path — i tried skipping EXEC, zeroing out the 5AA5 marker, skipping P2, and even the OEM software's preview mode still flashes. the keyboard commits to flash on every single color change. flash endurance on these Sinowealth chips is around 100,000 cycles.</p>
+
+            <table>
+                <tr><th>write frequency</th><th>flash lifetime</th></tr>
+                <tr><td>1 write/second</td><td>~27 hours</td></tr>
+                <tr><td>10 writes/second</td><td>~2.7 hours</td></tr>
+                <tr><td>30 writes/second</td><td>~55 minutes</td></tr>
+            </table>
+
+            <p>that killed the real-time screen sync dream, at least with this approach.</p>
+
+            <h2>what works</h2>
+
+            <img src="img/u1n1named.png" alt="keyboard with single red esc key">
+            <p class="caption">per-key control working — only esc set to red</p>
+
+            <p>per-key RGB control works perfectly. i can set any of the 61 keys to any color independently. and i built a screen sync tool on top of that — it captures a screenshot using <code>maim</code>, samples the color at each key's physical position on the screen, maps those colors to the keyboard, and applies them in one shot.</p>
+
+            <p>it's not real-time, but running it manually when you want your keyboard to match your screen is still pretty satisfying. the script needs <code>sudo</code> to access the HID device, but then <code>maim</code> can't access the X11 display because it's running as root. had to handle <code>DISPLAY</code> and <code>XAUTHORITY</code> environment variables and run maim as the original user to work around that.</p>
+
+            <h2>what's next</h2>
+
+            <p>one interesting direction would be writing completely custom firmware for this keyboard. the SH68F83 is an 8051-based microcontroller, and if you can figure out how the LED matrix is wired to the board — which rows and columns connect to which GPIO pins — you could flash your own firmware and have full control over everything. that's a much bigger project though.</p>
+
+            <table>
+                <tr><th>item</th><th>status</th></tr>
+                <tr><td>per-key RGB control</td><td>✓ working</td></tr>
+                <tr><td>screen color sync</td><td>✓ working (one-shot)</td></tr>
+                <tr><td>full protocol documentation</td><td>✓ done</td></tr>
+                <tr><td>real-time sync</td><td>✗ not possible (flash writes)</td></tr>
+                <tr><td>custom firmware</td><td>✗ future project</td></tr>
+            </table>
+
+            <h2>what i learned</h2>
+
+            <p>USB HID is surprisingly approachable once you get past the initial confusion. feature reports, output reports, usage pages — it sounds intimidating but Wireshark makes it very visual. the hardest part wasn't the protocol itself, it was figuring out that one missing <code>GET_REPORT</code> handshake.</p>
+
+            <p>also learned that cheap keyboard controllers are surprisingly capable chips. the SH68F83 has a full 8051 core, handles USB, drives the LED matrix, scans the key matrix — all on one chip. reverse engineering it was a good intro to embedded systems without needing any extra hardware.</p>
+
+        </div>
+        <div>
+            Published on: April 5, 2026
+        </div>
+    </div>
+
+
+</body></html>
