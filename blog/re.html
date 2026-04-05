@@ -174,12 +174,6 @@ p1[260 + led_index] = red_value    (0-255)</code></pre>
 
             <p><strong>flash writes every time.</strong> every EXEC packet contains a <code>5AA5</code> magic marker that triggers a flash write. there is no RAM-only path — i tried skipping EXEC, zeroing out the 5AA5 marker, skipping P2, and even the OEM software's preview mode still flashes. the keyboard commits to flash on every single color change. flash endurance on these Sinowealth chips is around 100,000 cycles.</p>
 
-            <table>
-                <tr><th>write frequency</th><th>flash lifetime</th></tr>
-                <tr><td>1 write/second</td><td>~27 hours</td></tr>
-                <tr><td>10 writes/second</td><td>~2.7 hours</td></tr>
-                <tr><td>30 writes/second</td><td>~55 minutes</td></tr>
-            </table>
 
             <p>that killed the real-time screen sync dream, at least with this approach.</p>
 
@@ -203,6 +197,9 @@ p1[260 + led_index] = red_value    (0-255)</code></pre>
 
             <p>also learned that cheap keyboard controllers are surprisingly capable chips. the SH68F83 has a full 8051 core, handles USB, drives the LED matrix, scans the key matrix — all on one chip. reverse engineering it was a good intro to embedded systems without needing any extra hardware.</p>
 
+        </div>
+        <div style="margin-top: 30px; font-size: 0.85em;">
+            <a href="https://github.com/orignalbox/k617-fizz">github.com/orignalbox/k617-fizz</a>
         </div>
         <div>
             Published on: April 5, 2026
