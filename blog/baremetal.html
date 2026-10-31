@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>bare-metal firmware on the rp2040 without the pico sdk</title>
+    <meta name="description" content="writing bare-metal firmware for the rp2040 on the vicharak shrike lite without the pico sdk">
+    <style>
+        body {
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            font-family: sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+            text-align: center;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            max-height: 250px;
+            display: block;
+            margin: 20px auto;
+        }
+
+        img.hero {
+            max-height: 300px;
+        }
+
+        .blog-body p {
+            text-align: left;
+        }
+
+        .blog-body code {
+            background: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        .blog-body pre {
+            background: #f4f4f4;
+            padding: 12px 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+            text-align: left;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .blog-body pre code {
+            background: none;
+            padding: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.9em;
+            text-align: left;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+        }
+
+        th {
+            background: #f4f4f4;
+            font-weight: 600;
+        }
+
+        .back-link {
+            text-align: center;
+        }
+
+        a {
+            color: #333;
+        }
+
+        .caption {
+            text-align: center;
+            font-size: 0.8em;
+            color: #888;
+            margin-top: -12px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="blog-post-container">
+        <p class="back-link"><a href="https://ogbox.me/blog/index.html">&lt;&lt; Back to Blog</a></p>
+        <h1>bare-metal firmware on the rp2040 without the pico sdk</h1>
+
+        <img class="hero" src="img/shrike_hardware.jpg" alt="the shrike lite running bare-metal blink firmware">
+        <p class="caption">the board running bare-metal blink firmware — red LED is power, blue is ours on GPIO 4</p>
+
+        <div class="blog-body">
+
+            <p>most of the hardware projects i have worked on so far have been on frameworks. with ESP-IDF you get
+                <code>app_main()</code>, a CMakeLists build system, FreeRTOS running underneath, and functions like
+                <code>gpio_set_level()</code> that handle everything. you write application code. the SDK handles the
+                boot process, memory layout, linker scripts, and peripheral initialization.</p>
+
+            <p>when you strip all of that away and try to write firmware from nothing — just the cross-compiler and the
+                datasheet — the floor drops out. there is no <code>gpio_init()</code>. there is no startup code. there
+                is no linker script. there is no bootloader. you provide all of it yourself, or the chip sits there and
+                does nothing.</p>
+
+            <p>i wanted to see what that looks like on the RP2040.</p>
+
+            <h2>the board</h2>
+
+            <p>the Vicharak Shrike Lite has two chips on it. the main one is the RP2040 — dual-core ARM Cortex-M0+ with
+                264 KB of SRAM. the second is a Renesas ForgeFPGA (SLG47910, 1120 LUTs). there are three LEDs — red for
+                the 3.3V power rail, one blue driven by the RP2040 on GPIO 4, and one blue driven by the FPGA.</p>
+
+            <p>the important thing about the RP2040 is that it has no internal flash. your code lives on an external
+                Winbond W25Q16JV — a 2 MB QSPI NOR flash chip soldered next to the RP2040. the CPU cannot execute from
+                it directly at power-on because the flash speaks a protocol (SPI/QSPI) that needs to be configured
+                first. this is the whole reason the boot process is as involved as it is.</p>
+
+            <p>also — the standard Raspberry Pi Pico has its user LED on GPIO 25. the Shrike Lite uses GPIO 4. if you
+                follow Pico tutorials without checking the schematic, you toggle the wrong pin and nothing visibly
+                happens.</p>
+
+            <h2>the boot chain</h2>
+
+            <p>there are three things inside the RP2040 that matter at boot: the CPU, the SRAM, and the Boot ROM. the
+                flash is external. the CPU needs to get from "power just came on" to "executing your code from flash" —
+                and that happens in stages.</p>
+
+            <img src="img/boot_chain.jpg" alt="boot chain diagram — Boot ROM, boot2, crt0, main">
+            <p class="caption">the four-stage boot chain — each layer hands off to the next</p>
+
+            <p><strong>boot rom — like the BIOS.</strong> 16 KB of mask ROM burned into the silicon at
+                <code>0x00000000</code>. you cannot change it. when power comes on, the CPU starts here. the Boot ROM
+                checks if the BOOT button is held — if yes, it enters USB mass storage mode (BOOTSEL) and waits for you
+                to drag a <code>.uf2</code> file onto it. if not, it reads the first 256 bytes from external flash
+                using basic 1-bit SPI, computes a CRC32 over bytes 0–251, and checks it against bytes 252–255. if the
+                checksum passes, it runs those 256 bytes.</p>
+
+            <p>the CRC uses a non-reversed polynomial (<code>0x04C11DB7</code>, MSB-first). Python's standard
+                <code>binascii.crc32()</code> uses reflected (LSB-first) CRC. if you use the wrong one, the Boot ROM
+                silently rejects it and loops back into BOOTSEL. no error message. nothing.</p>
+
+            <p><strong>boot2 — like GRUB.</strong> the 256 bytes the Boot ROM loaded. their job is to reconfigure the
+                flash interface from slow 1-bit SPI to Quad-SPI continuous read mode (command <code>0xEB</code>). this
+                lets the CPU fetch instructions directly from flash as though it were regular linear memory — called XIP
+                (eXecute In Place). after configuring the flash, boot2 returns to the Boot ROM via
+                <code>pop {r1, pc}</code>.</p>
+
+            <p>i tried writing boot2 by hand from the datasheet. it didn't work. the board would flash and immediately
+                fall back into BOOTSEL. the problem was that i hadn't configured the Quad Enable (QE) bit on the flash
+                chip's status register, hadn't primed the XIP cache, and wasn't following the return convention
+                correctly. i ended up using the official Raspberry Pi <code>boot2_w25q080</code> golden binary — 256
+                bytes with CRC <code>0x7a4eb274</code>.</p>
+
+            <p><strong>crt0 — like init.</strong> once boot2 returns, the Boot ROM reads the vector table from
+                <code>0x10000100</code>. word 0 is the initial stack pointer (<code>0x20042000</code>, top of SRAM).
+                word 1 is the reset handler address. the reset handler zeros <code>.bss</code> (uninitialized globals
+                must start at zero), copies <code>.data</code> from flash to RAM (initialized globals need to be in RAM
+                so you can modify them), and calls <code>main()</code>.</p>
+
+            <p><strong>main — like the OS.</strong> your actual firmware.</p>
+
+            <h2>three registers to blink an led</h2>
+
+            <p>the RP2040 boots with almost every peripheral held in reset to save power. to toggle a single GPIO pin,
+                you talk to three hardware blocks by writing to specific memory addresses.</p>
+
+            <img src="img/gpio_routing.jpg" alt="GPIO routing flow — RESETS to IO_BANK0 to SIO to LED">
+            <p class="caption">the signal path from CPU to LED — three register writes</p>
+
+            <p><strong>1. wake up the gpio subsystem.</strong> the RESETS controller at <code>0x4000C000</code> holds
+                peripherals in reset. clear bit 5 (<code>IO_BANK0</code>) and bit 8 (<code>PADS_BANK0</code>) to
+                release the GPIO hardware. then poll <code>RESETS_RESET_DONE</code> at <code>0x4000C008</code> until
+                both bits read 1 — the hardware is acknowledging that it is awake.</p>
+
+<pre><code>uint32_t reset_bits = RESETS_IO_BANK0_BIT | RESETS_PADS_BANK0_BIT;
+RESETS_RESET &amp;= ~reset_bits;
+while ((RESETS_RESET_DONE &amp; reset_bits) != reset_bits) {
+}</code></pre>
+
+            <p><strong>2. route the pin.</strong> every physical pin on the RP2040 is multiplexed — it can be SPI, UART,
+                I2C, PWM, or SIO (Single-cycle I/O). the default after reset is NULL (pin goes nowhere). writing
+                <code>FUNCSEL = 5</code> into <code>GPIO_CTRL(4)</code> at IO_BANK0 connects GPIO 4 to the SIO block,
+                which is the block that gives you direct CPU control over pin state.</p>
+
+<pre><code>GPIO_CTRL(LED_PIN_SHRIKE) = FUNCSEL_SIO;</code></pre>
+
+            <p><strong>3. toggle.</strong> the SIO block at <code>0xD0000000</code> has atomic SET, CLR, and XOR
+                registers. on most microcontrollers, toggling a pin means read the port register, flip the bit, write it
+                back — three operations that can be interrupted. the RP2040's XOR register does it in one CPU cycle.
+                writing <code>(1 &lt;&lt; 4)</code> to <code>SIO_GPIO_OUT_XOR</code> inverts GPIO 4 atomically.</p>
+
+<pre><code>SIO_GPIO_OE_SET = led_mask;
+for (;;) {
+    SIO_GPIO_OUT_XOR = led_mask;
+    delay(1000000);
+}</code></pre>
+
+            <p>that is the entire program. un-reset, route, toggle.</p>
+
+            <h2>the result</h2>
+
+            <img src="img/vim_datasheet.png" alt="Vim editing main.c alongside the RP2040 Datasheet">
+            <p class="caption">writing the firmware with the datasheet open</p>
+
+            <p>the firmware — boot2, vector table, startup assembly, and main — compiles to 604 bytes total. the UF2
+                output is 1,536 bytes (three 512-byte UF2 blocks). flashing it means holding the BOOT button, plugging
+                in USB-C, and running <code>cp blink.uf2 /run/media/$USER/RPI-RP2/</code>.</p>
+
+<pre><code>$ make
+   text    data     bss     dec     hex filename
+    604       0       0     604     25c blink.elf
+UF2: blink.bin -> blink.uf2 (604 bytes, 3 blocks)</code></pre>
+
+            <p>the project is seven source files. no build system beyond a Makefile. no dependencies beyond
+                <code>arm-none-eabi-gcc</code> and Python 3.</p>
+
+            <img src="img/vim_tree.png" alt="Vim file listing with the Datasheet">
+            <p class="caption">the project files in vim</p>
+
+            <h2>what went wrong</h2>
+
+            <p><strong>wrong crc32 polynomial.</strong> the Boot ROM uses a non-reversed CRC32 polynomial
+                (<code>0x04C11DB7</code>, MSB-first). Python's <code>binascii.crc32()</code> uses the reflected variant
+                (LSB-first). if you compute the checksum with the standard function, the Boot ROM silently rejects boot2
+                and loops back into BOOTSEL. no error, no feedback. i had to write a custom CRC function that matches
+                the Boot ROM's convention.</p>
+
+            <p><strong>wrong led pin.</strong> i spent time toggling GPIO 25 (the standard Pico LED pin) and seeing
+                nothing happen. the Shrike Lite routes its onboard user LED to GPIO 4. the fix was reading the board
+                schematic instead of assuming Pico compatibility. the firmware now toggles both pins.</p>
+
+            <p><strong>assembler offset limit.</strong> ARMv6-M Thumb encoding only supports 5-bit word-aligned
+                immediate offsets in <code>str</code> instructions — max 124 bytes. the SSI controller's
+                <code>SPI_CTRLR0</code> register is at offset <code>0xF4</code> from the base. the assembler rejected
+                it. the fix was loading the full address into a register instead of using a base+offset store.</p>
+
+            <p><strong>boot2 handshake.</strong> i tried writing boot2 from scratch using the datasheet. the board kept
+                falling back into BOOTSEL. i hadn't configured the Quad Enable bit on the flash chip's status register,
+                hadn't primed the XIP cache, and wasn't following the Boot ROM's return convention
+                (<code>pop {r1, pc}</code>). i ended up using the official Raspberry Pi golden boot2 binary — 256
+                bytes, CRC <code>0x7a4eb274</code>.</p>
+
+        </div>
+        <div style="margin-top: 30px; font-size: 0.85em;">
+            <a href="https://github.com/orignalbox/shrike-bare-metal">github.com/orignalbox/shrike-bare-metal</a>
+        </div>
+        <div>
+            Published on: October 31, 2026
+        </div>
+    </div>
+
+
+</body>
+
+</html>
