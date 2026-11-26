@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>a music box in fpga logic, with no cpu</title>
+    <meta name="description" content="playing melodies on a piezo disc using only verilog counters and a lookup table on the forgefpga of the vicharak shrike lite">
+    <style>
+        body {
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            font-family: sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+            text-align: center;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            max-height: 250px;
+            display: block;
+            margin: 20px auto;
+        }
+
+        img.hero {
+            max-height: 300px;
+        }
+
+        .blog-body p {
+            text-align: left;
+        }
+
+        .blog-body code {
+            background: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        .blog-body pre {
+            background: #f4f4f4;
+            padding: 12px 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+            text-align: left;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .blog-body pre code {
+            background: none;
+            padding: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.9em;
+            text-align: left;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+        }
+
+        th {
+            background: #f4f4f4;
+            font-weight: 600;
+        }
+
+        .back-link {
+            text-align: center;
+        }
+
+        a {
+            color: #333;
+        }
+
+        .caption {
+            text-align: center;
+            font-size: 0.8em;
+            color: #888;
+            margin-top: -12px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="blog-post-container">
+        <p class="back-link"><a href="https://ogbox.me/blog/index.html">&lt;&lt; Back to Blog</a></p>
+
+        <h1>a music box in fpga logic, with no cpu</h1>
+
+        <img class="hero" src="img/melody_setup.jpg" alt="the shrike lite playing a tune, piezo taped to a cardboard box">
+        <p class="caption">the shrike lite playing a tune, piezo on its box</p>
+
+        <div class="blog-body">
+
+            <p>in the last post i wrote firmware for the rp2040 with nothing but a compiler and the datasheet. this
+                time there is no cpu at all. the board has a second chip, an fpga, and i wanted to see how much music i
+                could get out of it using only counters and a lookup table.</p>
+
+            <p>the result is a music box. it plays a 16-note tune, each note fades out like a plucked string, and a
+                button switches songs. the whole design is about 85 lines of verilog.</p>
+
+            <h2>the board</h2>
+
+            <p>the Vicharak Shrike Lite has two chips: the RP2040 and a Renesas ForgeFPGA (SLG47910V, 1120 LUTs). the
+                FPGA has no flash of its own. the RP2040 stores the bitstream and loads it into the FPGA at runtime,
+                using <code>shrike.flash()</code> from the shrike micropython build.</p>
+
+            <p>so the cpu only configures the FPGA. after that, the sound comes from logic alone.</p>
+
+            <h2>the piezo</h2>
+
+            <img src="img/melody_piezo.png" alt="how a piezo disc makes sound — ceramic bends brass, pushes air">
+            <p class="caption">a piezo disc: voltage bends the ceramic, the brass flexes, air moves</p>
+
+            <p>the speaker is a 50 mm piezo disc, a ceramic layer glued to a brass plate. a voltage across the ceramic
+                makes it change size sideways, the brass doesn't, so the disc bends. flip the voltage back and forth and
+                the disc flexes, pushing air.</p>
+
+            <p>it is loud near its resonance, a few kHz, and weak at low frequencies. so all notes stay between about
+                520 Hz and 1.6 kHz.</p>
+
+            <p>i drive it with two pins, one outputting the signal and the other its inverse. the disc sees twice the
+                voltage swing, so it is louder.</p>
+
+            <h2>wiring</h2>
+
+            <img src="img/melody_schematic.png" alt="schematic — RP2040 loads bitstream into ForgeFPGA, IO0 and IO1 drive piezo, IO2 reads button">
+            <p class="caption">the wiring — rp2040 loads the fpga, three gpio pins do the rest</p>
+
+            <table>
+                <tr><th>part</th><th>goes to</th></tr>
+                <tr><td>piezo red, through a 100 &#8486; resistor</td><td>FPGA_IO0</td></tr>
+                <tr><td>piezo black</td><td>FPGA_IO1</td></tr>
+                <tr><td>button, one leg</td><td>FPGA_IO2</td></tr>
+                <tr><td>button, other leg</td><td>GND</td></tr>
+            </table>
+
+            <p>IO2 has its internal pull-up enabled in the pin settings, so the pin reads high until the button pulls it
+                to ground.</p>
+
+            <h2>one note is one counter</h2>
+
+            <p>the FPGA gets a 50 MHz clock from its internal oscillator. to make a square wave at frequency f, i flip
+                the output every half period, and the half period in clocks is:</p>
+
+<pre><code>half = 25,000,000 / f</code></pre>
+
+            <p>for E5 (659 Hz) that is 37,936 clocks. a counter counts up to that number, flips the output, and starts
+                again.</p>
+
+<pre><code>if (cnt >= half) begin
+    cnt <= 0;
+    sq  <= ~sq;
+end else
+    cnt <= cnt + 1'b1;</code></pre>
+
+            <p>that is the whole oscillator. a different note is a different number.</p>
+
+            <h2>the melody is a lookup table</h2>
+
+            <p>a second counter ticks once every 2^23 clocks, about 168 ms, and steps an index from 0 to 15. a
+                <code>case</code> statement turns the index into a note:</p>
+
+<pre><code>case ({song, idx})
+    5'd0: half = E5;
+    5'd1: half = E5;
+    5'd2: half = F5;
+    ...
+endcase</code></pre>
+
+            <p>the song bit is the button state, so there are two songs of 16 notes each: the opening of ode to joy,
+                and a c major arpeggio up and down. a half-period of 0 means a rest.</p>
+
+            <img src="img/melody_vim.png" alt="the verilog source code in vim">
+            <p class="caption">the case statement in vim — each note is a half-period count</p>
+
+            <h2>making it pluck</h2>
+
+            <p>a plain square wave at constant volume sounds like a doorbell. to make it sound like a struck string,
+                every note starts at full volume and fades.</p>
+
+            <p><code>env</code> is an 8-bit counter that jumps to 255 when a note starts and counts down by one every
+                2^15 clocks, so it reaches zero at about the end of the note. a second, very fast 8-bit counter,
+                <code>pwm</code>, counts continuously at 195 kHz, far above hearing. the tone only passes while
+                <code>pwm &lt; env</code>:</p>
+
+<pre><code>wire active = (half != 0) &amp;&amp; (pwm < env);
+assign piezo_p = active &amp;  sq;
+assign piezo_n = active &amp; ~sq;</code></pre>
+
+            <p>when <code>env</code> is high the tone is on most of the time. as it falls, the on-time shrinks and the
+                note gets quieter. when <code>active</code> is low, both pins are 0, so the piezo sees no voltage.</p>
+
+            <h2>the button</h2>
+
+            <p>a 20-bit counter samples the button about every 20 ms, which is the debounce. a high to low change
+                toggles the song bit.</p>
+
+            <h2>getting it onto the board</h2>
+
+            <p>the tools are made for windows and ubuntu, and i'm on arch, so:</p>
+
+<pre><code>yay -S go-configure-sw-hub
+/opt/go-configure-sw-hub/bin/GPLauncher</code></pre>
+
+            <img src="img/melody_goconfigure.png" alt="ForgeFPGA Workshop with the I/O Planner and pin settings">
+            <p class="caption">go configure — pin settings on the left, i/o planner on the right</p>
+
+            <p>in go configure i set GPIO0 and GPIO1 as push-pull outputs, GPIO2 with a pull-up, and mapped the ports
+                in the i/o planner. every output needs an output-enable signal tied high, and the oscillator needs its
+                own enable.</p>
+
+            <p>then the bitstream goes to the board through the RP2040:</p>
+
+<pre><code>mpremote cp FPGA_bitstream_MCU.bin :
+mpremote exec "import shrike; shrike.flash('FPGA_bitstream_MCU.bin')"</code></pre>
+
+            <h2>what went wrong</h2>
+
+            <p><strong>the first project sounded bad.</strong> i started with a shepard tone, the sound that seems to
+                rise forever. it needs sweeps up to 6 kHz at constant volume, and a 1-bit square wave on a piezo was
+                harsh. i switched to this melody box, which stays in the piezo's strong range and fades each note.</p>
+
+            <p><strong>old package database.</strong> <code>yay</code> failed with 404s on graphviz because my package
+                database was out of date. <code>sudo pacman -Syu</code> fixed it.</p>
+
+            <p><strong>the board was stuck as RP2 Boot.</strong> it showed up as a bootloader device with no serial
+                port. the <code>RPI-RP2</code> drive never mounted, so i used <code>picotool</code> to load the shrike
+                micropython uf2 instead.</p>
+
+            <p><strong>the missing serial port.</strong> after the uf2 loaded, <code>/dev/ttyACM0</code> still didn't
+                appear. the <code>pacman -Syu</code> had updated the kernel, so <code>cdc_acm</code> for the running
+                kernel was missing. a reboot fixed it.</p>
+
+            <p><strong>the wrong .bin.</strong> go configure writes several files. the shrike docs say only
+                <code>FPGA_bitstream_MCU.bin</code> programs the FPGA, and i first tried
+                <code>FPGA_bitstream.bin</code>.</p>
+
+        </div>
+        <div style="margin-top: 30px; font-size: 0.85em;">
+            <a href="https://github.com/orignalbox/shrike-melody-box">github.com/orignalbox/shrike-melody-box</a>
+        </div>
+        <div>
+            Published on: November 26, 2026
+        </div>
+    </div>
+
+
+</body>
+
+</html>
